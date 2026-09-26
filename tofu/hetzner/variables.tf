@@ -27,6 +27,12 @@ variable "image" {
   default     = "ubuntu-24.04"
 }
 
+variable "primary_ipv4_id" {
+  type        = number
+  description = "ID of a primary IPv4 the caller created in the server's location, assigned to the server instead of an automatically allocated one: its address is known before the server exists and outlives a server replacement. Null: the server allocates its own, deleted with it."
+  default     = null
+}
+
 variable "ssh_key_name" {
   type        = string
   description = "Name of an SSH key already registered in the Hetzner project; it is installed for root."

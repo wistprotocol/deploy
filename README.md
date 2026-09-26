@@ -86,7 +86,11 @@ reads from `VERIFY_CA`).
 
 `tofu/hetzner/` creates a firewall (22 from `operator_cidrs`, 80 and 443 from anywhere,
 ICMP) and one server whose cloud-init runs `clave-install` at first boot; `destroy` removes
-both, the server's primary IPv4 included. It works as a root configuration or as a module.
+both, the server's primary IPv4 included. It works as a root configuration or as a module. A
+caller that needs the address before the server exists (a DNS record set ahead of the first
+boot, an address that survives replacing the server) creates an `hcloud_primary_ip` in the
+same location and passes its id as `primary_ipv4_id`; that address is then the caller's to
+destroy.
 
 Prerequisites: a Hetzner Cloud project; an API token with read and write scope in the
 environment (`export HCLOUD_TOKEN=...`), never in a file here; an SSH key registered in the

@@ -65,6 +65,7 @@ resource "hcloud_server" "aggregator" {
 
   public_net {
     ipv4_enabled = true
+    ipv4         = var.primary_ipv4_id
     ipv6_enabled = true
   }
 }
