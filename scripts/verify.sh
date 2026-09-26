@@ -9,13 +9,22 @@ BASE=${1:?usage: verify.sh BASE_URL [PUBLIC_KEY...]}; shift
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 HOST=${BASE#https://}; HOST=${HOST%%/*}
 RUN="$HERE/run"; mkdir -p "$RUN"
-CURL=(curl -fsS --max-time 15)
+CA=()
 if [ -n "${VERIFY_CA:-}" ]; then
-  CURL+=(--cacert "$VERIFY_CA")
+  CA=(--cacert "$VERIFY_CA")
 elif [[ "$HOST" =~ ^[0-9.]+$ || "$HOST" == \[* ]]; then
   ssh -o StrictHostKeyChecking=accept-new "root@${HOST#[}" cat /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt > "$RUN/ca-$HOST.crt"
-  CURL+=(--cacert "$RUN/ca-$HOST.crt")
+  CA=(--cacert "$RUN/ca-$HOST.crt")
 fi
+CURL=(curl -fsS --max-time 15 "${CA[@]}")
 "${CURL[@]}" -o "$RUN/anchor.json" "$BASE/log/anchor.json"
-"${CURL[@]}" -o "$RUN/checkpoint" "$BASE/checkpoint"
+if ! "${CURL[@]}" -o "$RUN/checkpoint" "$BASE/checkpoint" 2>/dev/null; then
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${CA[@]}" "$BASE/checkpoint")
+  if [ "$code" = 404 ]; then
+    echo "$BASE serves Log $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["anchor"]["log_id"])' "$RUN/anchor.json") but no Checkpoint yet: the first Epoch seals at the next cadence instant; rerun after it" >&2
+  else
+    echo "$BASE/checkpoint: HTTP $code" >&2
+  fi
+  exit 1
+fi
 python3 "$HERE/scripts/verify-checkpoint.py" "$RUN/anchor.json" "$RUN/checkpoint" "$@"

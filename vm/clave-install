@@ -8,6 +8,7 @@ BIN=/usr/local/bin/clave
 UNIT=/etc/systemd/system/clave.service
 CADDYFILE=/etc/caddy/Caddyfile
 STAGE=$(mktemp -d)
+chmod 0755 "$STAGE"
 trap 'rm -rf "$STAGE"' EXIT
 
 # shellcheck disable=SC1090

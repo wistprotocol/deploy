@@ -28,8 +28,10 @@ Feeds and the release.
    PIN_SUFFIX_LIST=true
    ```
 3. Run `clave-install` as root. It installs the packages, downloads the release, verifies it,
-   initializes the Log, starts the unit and verifies the served head Checkpoint.
-4. From another machine: `scripts/verify.sh https://log.example.org`.
+   initializes the Log, starts the unit and verifies what is served. A new Log has no
+   Checkpoint before the first cadence instant (WIST-3 §3.2); until then the verifier reports
+   the Anchor and when the first Checkpoint is due.
+4. From another machine, after that instant: `scripts/verify.sh https://log.example.org`.
 
 The release is a Git tag `vX.Y.Z` on the Clave repository equal to `v` + the crate's Cargo
 version, carrying `clave-vX.Y.Z-<target>.tar.gz` (the `clave` binary at the archive root) and
@@ -49,7 +51,7 @@ tells which revision serves.
 | `clave-install [TAG]` | Downloads `TAG` (default: `CLAVE_VERSION`), checks its digest and that the binary reports that version; when a store exists, stops the unit and runs `clave-backup` first; installs the binary, unit and Caddy configuration; initializes a new Log when no store exists (identity: the served host; fresh keys; Public Suffix List pinned when enabled); starts the unit; runs `clave-verify`. |
 | `clave-backup [--keep-stopped] [DIR]` | Stops the unit, archives `/var/lib/clave` to `DIR/clave-<UTC>.tar.zst` (default `/var/backups/clave`) with a `.sha256` sidecar, starts the unit again unless `--keep-stopped`, prints the archive path. |
 | `clave-restore ARCHIVE` | Checks the sidecar, stops the unit, moves the current data directory aside as `/var/lib/clave.replaced-<UTC>` (never deleted), extracts the archive, starts and verifies. The restored Log keeps the archive's identity and keys. |
-| `clave-verify` | Waits for the unit, fetches Anchor and head Checkpoint through the proxy, verifies the Checkpoint under the Anchor's genesis key, prints identity, tree size and binary version. |
+| `clave-verify` | Waits for the unit, fetches Anchor and head Checkpoint through the proxy, verifies the Checkpoint under the Anchor's genesis key, prints identity, tree size and binary version. Before the first Epoch is sealed it prints the identity and the instant the first Checkpoint is due, and succeeds. |
 
 ### Upgrade
 

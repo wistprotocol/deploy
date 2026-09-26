@@ -13,10 +13,10 @@ if [ -z "${PUBLIC_HOSTNAME:-}" ]; then
 fi
 
 for _ in $(seq 1 60); do
-  if curl -fs -o /dev/null http://127.0.0.1:8080/checkpoint 2>/dev/null; then break; fi
+  if curl -fs -o /dev/null http://127.0.0.1:8080/log/anchor.json 2>/dev/null; then break; fi
   sleep 1
 done
-curl -fsS -o /dev/null http://127.0.0.1:8080/checkpoint || { echo "the aggregator does not answer locally" >&2; journalctl -u clave -n 30 --no-pager >&2; exit 1; }
+curl -fsS -o /dev/null http://127.0.0.1:8080/log/anchor.json || { echo "the aggregator does not answer locally" >&2; journalctl -u clave -n 30 --no-pager >&2; exit 1; }
 
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 for _ in $(seq 1 60); do
@@ -24,6 +24,14 @@ for _ in $(seq 1 60); do
   sleep 2
 done
 "${CURL[@]}" -o "$WORK/anchor.json" "https://$HOST/log/anchor.json"
+LOG_ID=$(jq -r .anchor.log_id "$WORK/anchor.json")
+BINARY=$(/usr/local/bin/clave --version)
+if [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/checkpoint)" = 404 ]; then
+  # WIST-3 §3.2: Epochs seal only at cadence grid instants, so a Log has no Checkpoint before the first one.
+  due=$(( ($(date +%s) / EPOCH_CADENCE_SECONDS + 1) * EPOCH_CADENCE_SECONDS ))
+  echo "clave-verify: https://$HOST serves Log $LOG_ID with no Epoch sealed yet; the first Checkpoint is due at $(date -u -d "@$due" +%Y-%m-%dT%H:%M:%SZ), binary $BINARY"
+  exit 0
+fi
 "${CURL[@]}" -o "$WORK/checkpoint" "https://$HOST/checkpoint"
 python3 /usr/local/lib/clave/verify-checkpoint.py "$WORK/anchor.json" "$WORK/checkpoint"
-echo "clave-verify: https://$HOST serves Log $(jq -r .anchor.log_id "$WORK/anchor.json"), tree size $(sed -n 2p "$WORK/checkpoint"), binary $(/usr/local/bin/clave --version)"
+echo "clave-verify: https://$HOST serves Log $LOG_ID, tree size $(sed -n 2p "$WORK/checkpoint"), binary $BINARY"
