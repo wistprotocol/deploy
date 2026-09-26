@@ -1,0 +1,106 @@
+#!/bin/bash
+# usage: clave-install [TAG]   (default TAG: CLAVE_VERSION in /etc/clave/env; README lists the keys)
+set -euo pipefail
+
+ENV_FILE=/etc/clave/env
+DATA=/var/lib/clave
+BIN=/usr/local/bin/clave
+UNIT=/etc/systemd/system/clave.service
+CADDYFILE=/etc/caddy/Caddyfile
+STAGE=$(mktemp -d)
+trap 'rm -rf "$STAGE"' EXIT
+
+# shellcheck disable=SC1090
+. "$ENV_FILE"
+TAG=${1:-$CLAVE_VERSION}
+ASSET="clave-${TAG}-${CLAVE_TARGET}.tar.gz"
+URL="${CLAVE_RELEASE_BASE_URL}/${TAG}"
+
+log() { echo "clave-install: $*"; logger -t clave-install -- "$*"; }
+
+log "installing $TAG from $URL"
+export DEBIAN_FRONTEND=noninteractive
+apt-get install -y -q -o DPkg::Lock::Timeout=300 caddy curl ca-certificates zstd jq python3 python3-cryptography >/dev/null
+
+if ! id -u clave >/dev/null 2>&1; then
+  useradd --system --home-dir "$DATA" --shell /usr/sbin/nologin clave
+fi
+install -d -m 0750 -o clave -g clave "$DATA"
+install -d -m 0750 /var/backups/clave
+
+curl -fsSL --retry 5 --retry-delay 3 -o "$STAGE/$ASSET" "$URL/$ASSET"
+curl -fsSL --retry 5 --retry-delay 3 -o "$STAGE/SHA256SUMS" "$URL/SHA256SUMS"
+(cd "$STAGE" && grep " ${ASSET}\$" SHA256SUMS | sha256sum -c --quiet -)
+tar -xzf "$STAGE/$ASSET" -C "$STAGE" clave
+REPORTED=$("$STAGE/clave" --version | awk '{print $2}')
+if [ "v$REPORTED" != "$TAG" ]; then
+  log "release $TAG contains a binary reporting version $REPORTED"
+  exit 1
+fi
+
+if [ -e "$DATA/clave.sqlite" ]; then
+  log "store present: stopping the unit and backing up before replacing the binary"
+  systemctl stop clave || true
+  /usr/local/sbin/clave-backup --keep-stopped
+fi
+install -m 0755 "$STAGE/clave" "$BIN"
+log "installed $("$BIN" --version) sha256 $(sha256sum "$BIN" | cut -d' ' -f1)"
+
+cat > "$UNIT" <<'UNIT'
+[Unit]
+Description=Clave aggregator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=clave
+Group=clave
+ExecStartPre=/usr/local/bin/clave --version
+ExecStart=/usr/local/bin/clave serve --data /var/lib/clave --bind 127.0.0.1:8080 --instance primary
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=90
+KillSignal=SIGTERM
+LimitNOFILE=65536
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/clave
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+if [ -n "${PUBLIC_HOSTNAME:-}" ]; then
+  SERVED_HOST=$PUBLIC_HOSTNAME
+  {
+    [ -n "${ACME_EMAIL:-}" ] && printf '{\n\temail %s\n}\n\n' "$ACME_EMAIL"
+    printf 'https://%s {\n\treverse_proxy 127.0.0.1:8080\n}\n' "$SERVED_HOST"
+  } > "$CADDYFILE"
+else
+  SERVED_HOST=${SERVED_HOST:-$(curl -fsS -m 3 --retry 2 http://169.254.169.254/hetzner/v1/metadata/public-ipv4 2>/dev/null || true)}
+  SERVED_HOST=${SERVED_HOST:-$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "src") print $(i + 1)}')}
+  [ -n "$SERVED_HOST" ] || { log "no public hostname, SERVED_HOST or detectable address"; exit 1; }
+  printf 'https://%s {\n\ttls internal\n\treverse_proxy 127.0.0.1:8080\n}\n' "$SERVED_HOST" > "$CADDYFILE"
+fi
+echo "$SERVED_HOST" > /etc/clave/served-host
+systemctl enable -q caddy
+systemctl restart caddy
+
+if [ ! -e "$DATA/clave.sqlite" ]; then
+  INIT_ARGS=(--log-id "$SERVED_HOST" --data "$DATA" --cadence "$EPOCH_CADENCE_SECONDS")
+  if [ "${PIN_SUFFIX_LIST:-false}" = "true" ]; then
+    curl -fsSL --retry 5 -o "$STAGE/public_suffix_list.dat" https://publicsuffix.org/list/public_suffix_list.dat
+    chmod 0644 "$STAGE/public_suffix_list.dat"
+    INIT_ARGS+=(--suffix-list "$STAGE/public_suffix_list.dat")
+  fi
+  log "initializing a new Log with identity $SERVED_HOST and fresh keys"
+  runuser -u clave -- "$BIN" init "${INIT_ARGS[@]}"
+fi
+
+systemctl daemon-reload
+systemctl enable -q clave
+systemctl restart clave
+/usr/local/sbin/clave-verify
+log "serving $TAG at https://$SERVED_HOST"

@@ -1,0 +1,23 @@
+#!/bin/bash
+# usage: clave-restore ARCHIVE   (an archive written by clave-backup)
+set -euo pipefail
+
+DATA=/var/lib/clave
+ARCHIVE=${1:?usage: clave-restore ARCHIVE}
+[ -r "$ARCHIVE" ] || { echo "cannot read $ARCHIVE" >&2; exit 1; }
+if [ -r "$ARCHIVE.sha256" ]; then
+  (cd "$(dirname "$ARCHIVE")" && sha256sum -c --quiet "$(basename "$ARCHIVE").sha256")
+fi
+
+systemctl stop clave || true
+if [ -e "$DATA" ]; then
+  ASIDE="$DATA.replaced-$(date -u +%Y%m%dT%H%M%SZ)"
+  mv "$DATA" "$ASIDE"
+  logger -t clave-restore -- "moved previous data directory to $ASIDE"
+fi
+tar --zstd -C "$(dirname "$DATA")" -xf "$ARCHIVE"
+chown -R clave:clave "$DATA"
+chmod 0750 "$DATA"
+systemctl start clave
+/usr/local/sbin/clave-verify
+logger -t clave-restore -- "restored $ARCHIVE; Log identity $(jq -r .anchor.log_id "$DATA/anchor.json")"

@@ -1,0 +1,29 @@
+#!/bin/bash
+# usage: clave-verify
+set -euo pipefail
+
+HOST=$(cat /etc/clave/served-host)
+LOCAL_CA=/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt
+# shellcheck disable=SC1091
+. /etc/clave/env
+CURL=(curl -fsS --max-time 10)
+if [ -z "${PUBLIC_HOSTNAME:-}" ]; then
+  for _ in $(seq 1 30); do [ -r "$LOCAL_CA" ] && break; sleep 1; done
+  CURL+=(--cacert "$LOCAL_CA")
+fi
+
+for _ in $(seq 1 60); do
+  if curl -fs -o /dev/null http://127.0.0.1:8080/checkpoint 2>/dev/null; then break; fi
+  sleep 1
+done
+curl -fsS -o /dev/null http://127.0.0.1:8080/checkpoint || { echo "the aggregator does not answer locally" >&2; journalctl -u clave -n 30 --no-pager >&2; exit 1; }
+
+WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
+for _ in $(seq 1 60); do
+  if "${CURL[@]}" -o "$WORK/anchor.json" "https://$HOST/log/anchor.json" 2>/dev/null; then break; fi
+  sleep 2
+done
+"${CURL[@]}" -o "$WORK/anchor.json" "https://$HOST/log/anchor.json"
+"${CURL[@]}" -o "$WORK/checkpoint" "https://$HOST/checkpoint"
+python3 /usr/local/lib/clave/verify-checkpoint.py "$WORK/anchor.json" "$WORK/checkpoint"
+echo "clave-verify: https://$HOST serves Log $(jq -r .anchor.log_id "$WORK/anchor.json"), tree size $(sed -n 2p "$WORK/checkpoint"), binary $(/usr/local/bin/clave --version)"

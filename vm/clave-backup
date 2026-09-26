@@ -1,0 +1,22 @@
+#!/bin/bash
+# usage: clave-backup [--keep-stopped] [DIR]   (default DIR: /var/backups/clave)
+set -euo pipefail
+
+DATA=/var/lib/clave
+KEEP_STOPPED=false
+if [ "${1:-}" = "--keep-stopped" ]; then KEEP_STOPPED=true; shift; fi
+DIR=${1:-/var/backups/clave}
+install -d -m 0750 "$DIR"
+
+WAS_ACTIVE=false
+if systemctl is-active -q clave; then WAS_ACTIVE=true; systemctl stop clave; fi
+
+STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+ARCHIVE="$DIR/clave-$STAMP.tar.zst"
+tar --zstd -C "$(dirname "$DATA")" -cf "$ARCHIVE" "$(basename "$DATA")"
+(cd "$DIR" && sha256sum "$(basename "$ARCHIVE")" > "$ARCHIVE.sha256")
+chmod 0600 "$ARCHIVE" "$ARCHIVE.sha256"
+logger -t clave-backup -- "wrote $ARCHIVE ($(stat -c %s "$ARCHIVE") bytes)"
+
+if [ "$WAS_ACTIVE" = true ] && [ "$KEEP_STOPPED" = false ]; then systemctl start clave; fi
+echo "$ARCHIVE"
